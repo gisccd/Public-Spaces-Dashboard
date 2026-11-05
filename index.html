@@ -1,0 +1,1314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Public Space Issues</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Overpass:wght@600;700;800&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://js.arcgis.com/4.30/esri/themes/light/main.css">
+<script src="https://js.arcgis.com/4.30/"></script>
+
+<script>
+/* =====================================================================
+   CONFIGURATION — this is the only section you need to edit.
+   ===================================================================== */
+const CONFIG = {
+
+  APP_TITLE: "Public Space Issues",
+  TEAM_NAME: "created_user",
+
+  // ArcGIS Online (or your Enterprise portal)
+  PORTAL_URL: "https://maps.centercityphila.org/portal",
+  // Leave blank to use the built-in sign-in box. If your staff sign in with a
+  // company (SAML / Microsoft) login, register an app in your portal and paste its App ID here.
+  OAUTH_APP_ID: "",
+
+  // The hosted feature layer behind your Survey123 form (note the /0 at the end)
+  FEATURE_LAYER_URL: "https://maps.centercityphila.org/server/rest/services/Hosted/service_9d73bae4d3ad4bd9bbe5d33360e7f81f/FeatureServer/",
+
+  // Your Survey123 form's share link
+  SURVEY_URL: "https://survey123.arcgis.com/share/7d37a74ccc05435ca5316b22b7ec7846?portalUrl=https://maps.centercityphila.org/portal",
+
+  // Field names in the feature layer (match these to your survey's question names)
+  FIELDS: {
+    id:            "objectid",
+    location:     "location_name",
+    asset:     "category",
+    issueType:         "asset",
+    assignedTo:    "agency",
+    status:        "status_history",
+    problem:       "problem",
+    notes:         "notes",
+    locationDesc:  "location_name",
+    submittedBy:   "created_user",        // Survey123 adds Creator automatically
+    submittedAt:   "created_date",   // Survey123 adds CreationDate automatically
+    lastContacted: "last_contacted", // optional Date field — add it to log reminders
+    contactCount:  "contact_count",  // optional Integer field — add it to count reminders
+    statusHistory: "status_history", // Text field (length 10000) — records who changed the status and when
+    case311:       "case_311"        // optional Text field — stores the Philly311 case number
+  },
+
+  // Survey123 question names used to pre-fill the form (leave a value "" to skip it)
+  SURVEY_FIELDS: {
+    issueType:    "issue_type",
+    asset:        "asset_type",
+    locationDesc: "location_desc"
+  },
+
+  // Duplicate check defaults (users can adjust them in the app)
+  DUPLICATE_RADIUS_FT: 150,
+  DUPLICATE_DAYS: 30,
+
+  // Warn before contacting a partner again about the same issue within this many days
+  CONTACT_COOLDOWN_DAYS: 3,
+
+  // Show a "Delete issue" button (the layer must also allow deletes for your account)
+  ALLOW_DELETE: true,
+
+  // Emails open as a new message in Outlook on the web, ready to send.
+  // If your organization uses a different Outlook address, change it here.
+  OUTLOOK_COMPOSE_URL: "https://outlook.office.com/mail/deeplink/compose",
+
+  // Agencies that get a Philly311 request instead of an email (matched against the "assigned to" value)
+  PHILLY311_AGENCIES: ["CLIP"],
+  // Page that opens for Philly311. Swap in the direct web-portal link if you have it bookmarked.
+  PHILLY311_URL: "https://iframe.publicstuff.com/#?client_id=242",
+
+  // Status set automatically when an email or 311 request is logged ("" = leave the status alone).
+  // Issues that are already Resolved or Closed are never moved back.
+  // Status used when a record has no status yet (match the default you set on the layer's status field)
+  DEFAULT_STATUS: "New",
+
+  STATUS_AFTER: {
+    firstEmail: "Reported to agency",
+    reminder:   "Reminder sent",
+    philly311:  "Reported to agency"
+  },
+
+  MAP_CENTER: [-75.1652, 39.9526],  // [longitude, latitude] of your district
+  MAP_ZOOM: 16,
+  BASEMAP: "streets-vector",
+  EMAIL_MAP_ZOOM: 17,               // zoom of the small map added to emails
+
+  ISSUE_TYPES: ["Graffiti", "Broken or damaged", "Overflowing / litter", "Missing", "Light out", "Trip hazard", "Illegal dumping", "Other"],
+  ASSET_TYPES: ["Trash can", "Recycling bin", "Bench", "Streetlight", "Tree or tree pit", "Planter", "Sidewalk", "Curb ramp", "Bike rack", "Bus shelter", "Sign", "Fire hydrant", "Utility box"],
+
+  // Status values, their marker colors, and whether they count as finished
+  STATUSES: [
+    { value: "New",                 color: "#E8620A", done: false },
+    { value: "Reported to agency", color: "#2563A8", done: false },
+    { value: "Reminder sent", color: "#2563A8", done: false },
+    { value: "In progress",         color: "#B98A00", done: false },
+    { value: "Resolved",            color: "#2F8F5B", done: true  },
+    { value: "Closed",              color: "#7A8580", done: true  }
+  ],
+
+  // Partner directory: the "assigned to" value -> who gets the email
+  PARTNERS: {
+    "Public Works (Streets)": { email: "streets@example.gov",   cc: "" },
+    "Parks & Recreation":     { email: "parks@example.gov",     cc: "" },
+    "Electric Utility":       { email: "outages@example.com",   cc: "" },
+    "Transit Authority":      { email: "shelters@example.org",  cc: "" },
+    "Water Department":       { email: "water@example.gov",     cc: "" }
+  },
+
+  // Usernames (created_user / sign-in name) -> the full name shown in the app and emails
+  USERS: {
+    "jbrain@centercitydistr":  "Jessie Brain",
+    "dwilburn@CENTERCITYDISTR":   "Devoun Wilburn",
+    "user3":   "First Last",
+    "user4":   "First Last",
+    "user5":   "First Last",
+    "user6":   "First Last"
+  },
+
+  // {name} and {email} are replaced with the signed-in person's name and email
+  EMAIL_SIGNATURE: "Thank you,"
+};
+</script>
+
+<style>
+:root{
+  --bg:#EDF0EE; --surface:#FFFFFF; --surface-2:#F5F7F6; --ink:#16302A; --muted:#566862;
+  --line:#D3DAD7; --plate:#0B6E4F; --plate-ink:#FFFFFF; --focus:#1E66F5;
+  --warn-bg:#FFF4D6; --warn-ink:#6B4E00; --err-bg:#FDE8E4; --err-ink:#8A2414;
+  color-scheme: light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#101816; --surface:#18221F; --surface-2:#1F2B28; --ink:#E4ECE8; --muted:#9CADA7;
+    --line:#2C3B37; --plate:#15875F; --plate-ink:#FFFFFF; --focus:#7AA7FF;
+    --warn-bg:#3A3014; --warn-ink:#F2D98A; --err-bg:#3D1C16; --err-ink:#F5B4A6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#101816; --surface:#18221F; --surface-2:#1F2B28; --ink:#E4ECE8; --muted:#9CADA7;
+  --line:#2C3B37; --plate:#15875F; --plate-ink:#FFFFFF; --focus:#7AA7FF;
+  --warn-bg:#3A3014; --warn-ink:#F2D98A; --err-bg:#3D1C16; --err-ink:#F5B4A6;
+  color-scheme: dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 "Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column}
+h1,h2,h3,.plate,.step-n{font-family:Overpass,"Public Sans",system-ui,sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+.plate{display:inline-flex;align-items:center;background:var(--plate);color:var(--plate-ink);
+  font-weight:700;letter-spacing:.01em;border-radius:5px;padding:.1em .55em .02em;
+  box-shadow:inset 0 0 0 2px var(--plate),inset 0 0 0 3.5px var(--plate-ink);line-height:1.35;white-space:nowrap}
+
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{margin:0;font-size:1.3rem}
+header h1 .plate{padding:.2em .7em .08em}
+header .spacer{flex:1}
+.who{color:var(--muted);font-size:.85rem}
+
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:.5em .9em;cursor:pointer;font-weight:600;font-size:.9rem;display:inline-flex;align-items:center;gap:.4em}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--plate);border-color:var(--plate);color:var(--plate-ink)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.danger{color:var(--err-ink);border-color:var(--err-ink)}
+.btn.danger.solid{background:var(--err-ink);color:var(--surface)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.small{padding:.3em .65em;font-size:.82rem}
+.linkbtn{background:none;border:0;padding:0;color:var(--plate);font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+
+main{flex:1;display:grid;grid-template-columns:minmax(340px,420px) 1fr;min-height:0}
+aside{background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+#map{min-height:0;height:100%}
+.pane{flex:1;overflow:auto;padding:14px 16px 24px}
+
+.banner{margin:10px 16px 0;padding:.6em .8em;border-radius:8px;font-size:.88rem}
+.banner.warn{background:var(--warn-bg);color:var(--warn-ink)}
+.banner.err{background:var(--err-bg);color:var(--err-ink)}
+
+.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.filters .full{grid-column:1/-1}
+label.f{display:flex;flex-direction:column;gap:3px;font-size:.78rem;color:var(--muted);font-weight:500}
+input[type=text],input[type=search],input[type=number],input[type=email],select,textarea{
+  width:100%;border:1px solid var(--line);background:var(--surface-2);border-radius:7px;padding:.45em .6em;font-size:.9rem}
+textarea{resize:vertical;font-family:"Public Sans",system-ui,sans-serif;line-height:1.45}
+.count{font-size:.85rem;color:var(--muted);margin:4px 0 8px}
+
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:.78rem;color:var(--muted);margin-bottom:10px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px;border:1.5px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+
+ul.list{list-style:none;margin:0;padding:0}
+ul.list li{border-top:1px solid var(--line)}
+ul.list button.row{all:unset;box-sizing:border-box;display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;width:100%;padding:10px 4px;cursor:pointer}
+ul.list button.row:hover{background:var(--surface-2)}
+ul.list button.row:focus-visible{outline:2px solid var(--focus)}
+ul.list button.row.sel{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--plate)}
+.row .plate{font-size:.8rem;grid-row:span 2;align-self:start;margin-top:2px}
+.row .t{font-weight:600}
+.row .s{grid-column:2/4;font-size:.83rem;color:var(--muted)}
+.row .when{font-size:.78rem;color:var(--muted);text-align:right}
+
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:.78rem;font-weight:600;padding:.12em .55em;border-radius:99px;background:var(--surface-2);border:1px solid var(--line)}
+
+/* Detail */
+.back{margin-bottom:12px}
+.detail h2{font-size:1.35rem;margin:.4em 0 .2em;line-height:1.25}
+dl.facts{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:14px 0;font-size:.9rem}
+dl.facts dt{color:var(--muted)}
+dl.facts dd{margin:0}
+.notes{background:var(--surface-2);border-radius:8px;padding:.7em .85em;font-size:.9rem;white-space:pre-wrap}
+.sect{margin-top:18px}
+.sect-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.sect-h h3{margin:0;font-size:1rem}
+.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.photos a{display:block;border-radius:8px;overflow:hidden;border:1px solid var(--line);aspect-ratio:4/3;background:var(--surface-2)}
+.photos img{width:100%;height:100%;object-fit:cover;display:block}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.muted{color:var(--muted)}
+.small{font-size:.83rem}
+
+/* Status history */
+ol.timeline{list-style:none;margin:0;padding:0 0 0 6px}
+ol.timeline li{position:relative;padding:0 0 12px 18px;border-left:2px solid var(--line);font-size:.9rem}
+ol.timeline li:last-child{border-left-color:transparent;padding-bottom:0}
+ol.timeline .dot{position:absolute;left:-7px;top:5px;width:12px;height:12px;margin:0}
+
+/* Report flow */
+.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+.steps>li{border-left:2px solid var(--line);margin-left:13px;padding:0 0 18px 22px;position:relative}
+.steps>li:last-child{border-left-color:transparent}
+.step-n{position:absolute;left:-14px;top:-2px;width:26px;height:26px;border-radius:50%;background:var(--surface);border:2px solid var(--line);display:grid;place-items:center;font-weight:800;font-size:.85rem}
+.steps>li.done .step-n{background:var(--plate);border-color:var(--plate);color:var(--plate-ink)}
+.steps h3{margin:0 0 6px;font-size:1rem}
+.match{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0;font-size:.88rem}
+.match.same{border-color:var(--plate);box-shadow:inset 3px 0 0 var(--plate)}
+.match .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.match .acts{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.inline{display:flex;gap:8px;align-items:end}
+.inline label.f{flex:1}
+.check{display:flex;gap:8px;align-items:flex-start;font-size:.9rem;margin:6px 0 10px}
+.check input{margin-top:4px}
+
+/* Editing */
+.editrow{display:flex;gap:8px;align-items:end;margin:12px 0 0;max-width:360px}
+.editrow label.f{flex:1}
+.movebox{border:1.5px dashed var(--plate);border-radius:8px;padding:10px 12px;margin-top:14px;font-size:.9rem}
+.movebox p{margin:4px 0 8px}
+.from{font-size:.83rem;color:var(--muted);margin:0}
+
+/* Composer dialog */
+dialog{border:0;border-radius:12px;padding:0;width:min(680px,94vw);max-height:92vh;background:var(--surface);color:var(--ink);box-shadow:0 18px 60px rgba(0,0,0,.35)}
+dialog::backdrop{background:rgba(10,20,18,.5)}
+.dlg{padding:18px 20px;display:flex;flex-direction:column;gap:10px;max-height:92vh;overflow:auto}
+.dlg h2{margin:0;font-size:1.2rem}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;align-self:flex-start}
+.seg label{padding:.35em .8em;cursor:pointer;font-size:.85rem;font-weight:600}
+.seg input{position:absolute;opacity:0;pointer-events:none}
+.seg label:has(input:checked){background:var(--plate);color:var(--plate-ink)}
+.seg label:has(input:focus-visible){outline:2px solid var(--focus);outline-offset:-2px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.dlg .actions{justify-content:flex-end;margin-top:4px}
+.atts{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}
+.att{position:relative;display:block;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface-2);cursor:pointer;font-size:.75rem}
+.att.map{grid-column:span 2}
+.att img,.att .ph{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}
+.att.map img,.att.map .ph{aspect-ratio:16/10}
+.att .ph{display:grid;place-items:center;color:var(--muted);padding:6px;text-align:center}
+.att input{position:absolute;top:6px;left:6px;width:18px;height:18px;margin:0}
+.att .cap{display:block;padding:3px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.att:has(input:not(:checked)) img{opacity:.35}
+ol.howto{margin:0;padding-left:1.3em;font-size:.85rem;color:var(--muted)}
+ol.howto li{margin:3px 0}
+
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:.6em 1em;border-radius:8px;font-size:.9rem;opacity:0;pointer-events:none;transition:opacity .2s;z-index:50;max-width:90vw}
+#toast.show{opacity:1}
+
+@media (max-width:820px){
+  main{grid-template-columns:1fr;grid-template-rows:42vh 1fr}
+  #map{grid-row:1}
+  aside{grid-row:2;border-right:0;border-top:1px solid var(--line)}
+  .two{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){#toast{transition:none}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="plate" id="appTitle">Public Space Issues</span></h1>
+  <span class="who" id="who"></span>
+  <span class="spacer"></span>
+  <button class="btn" id="refreshBtn" type="button">Refresh</button>
+  <button class="btn primary" id="reportBtn" type="button">Report an issue</button>
+</header>
+
+<main>
+  <aside>
+    <div id="banners"></div>
+    <div class="pane" id="pane"></div>
+  </aside>
+  <div id="map" role="application" aria-label="Map of reported issues"></div>
+</main>
+
+<dialog id="composer" aria-labelledby="composerTitle"></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+/* ---------- Helpers ---------- */
+const F = CONFIG.FIELDS;
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const DAY = 86400000;
+let STATUS_DOMAIN = null;
+function statusInfo(v){
+  if (v == null || String(v).trim() === "" || String(v).trim().toLowerCase() === "unknown") v = CONFIG.DEFAULT_STATUS || "New";
+  const label = STATUS_DOMAIN?.find(c => String(c.code) === String(v))?.name ?? v;
+  const norm = x => String(x ?? "").trim().toLowerCase();
+  return CONFIG.STATUSES.find(s => norm(s.value) === norm(label) || norm(s.value) === norm(v))
+    || { value: label || "Unknown", color: "#888", done: false };
+}
+function statusOptions(cur){
+  const opts = STATUS_DOMAIN ? STATUS_DOMAIN.map(c => [String(c.code), c.name]) : CONFIG.STATUSES.map(s => [s.value, s.value]);
+  if (cur != null && !opts.some(([c]) => c === String(cur))) opts.unshift([String(cur), statusInfo(cur).value]);
+  return opts.map(([c, n]) => `<option value="${esc(c)}"${c === String(cur) ? " selected" : ""}>${esc(n)}</option>`).join("");
+}
+const fmtDate = d => d ? d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
+const fmtDateTime = d => d ? d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) : "—";
+function ago(d){
+  if (!d) return "never";
+  const days = Math.floor((Date.now() - d.getTime()) / DAY);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 60) return `${days} days ago`;
+  return fmtDate(d);
+}
+function distFt(lat1, lon1, lat2, lon2){
+  const R = 20902231, r = x => x * Math.PI / 180;
+  const a = Math.sin(r(lat2-lat1)/2)**2 + Math.cos(r(lat1))*Math.cos(r(lat2))*Math.sin(r(lon2-lon1)/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function toast(msg){ const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 4000); }
+function banner(kind, html){ $("#banners").insertAdjacentHTML("beforeend", `<div class="banner ${kind}">${html}</div>`); }
+function lookupName(u){
+  if (!u) return null;
+  const key = String(u).trim().toLowerCase(), short = key.split("@")[0];
+  for (const [k, v] of Object.entries(CONFIG.USERS || {})) {
+    const kk = k.toLowerCase();
+    if (kk === key || kk === short) return v;
+  }
+  return null;
+}
+const displayName = u => lookupName(u) || u || "";
+const options = (arr, sel, blank) => (blank !== undefined ? `<option value="">${esc(blank)}</option>` : "") + arr.map(v => `<option${v===sel?" selected":""}>${esc(v)}</option>`).join("");
+const norm = x => String(x ?? "").trim().toLowerCase();
+const is311 = i => (CONFIG.PHILLY311_AGENCIES || []).some(a =>
+  new RegExp(`(^|\\W)${String(a).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\W|$)`, "i").test(String(i?.assignedTo || "")));
+function parseHistory(v){
+  if (!v) return [];
+  try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+/* ---------- State ---------- */
+const state = {
+  issues: [], selectedId: null, view: "list", user: "", me: null, live: false, moving: null,
+  filters: { q: "", status: "open", asset: "", partner: "", days: "90" },
+  report: { lat: null, lon: null, issueType: "", asset: "", locationDesc: "", radius: CONFIG.DUPLICATE_RADIUS_FT, days: CONFIG.DUPLICATE_DAYS, confirmed: false },
+  photoCache: {}, mapCache: {}, mapReady: {}
+};
+
+/* ---------- ArcGIS ---------- */
+require([
+  "esri/Map", "esri/views/MapView", "esri/layers/FeatureLayer", "esri/layers/GraphicsLayer",
+  "esri/Graphic", "esri/geometry/Circle", "esri/identity/IdentityManager", "esri/identity/OAuthInfo",
+  "esri/portal/Portal", "esri/geometry/Point", "esri/geometry/projection", "esri/geometry/support/webMercatorUtils",
+  "esri/request", "esri/core/reactiveUtils"
+], (EsriMap, MapView, FeatureLayer, GraphicsLayer, Graphic, Circle, esriId, OAuthInfo, Portal, Point, projection, webMercatorUtils, esriRequest, reactiveUtils) => {
+
+  $("#appTitle").textContent = CONFIG.APP_TITLE;
+  document.title = CONFIG.APP_TITLE;
+
+  if (!CONFIG.DEMO_MODE && CONFIG.OAUTH_APP_ID) {
+    esriId.registerOAuthInfos([new OAuthInfo({ appId: CONFIG.OAUTH_APP_ID, portalUrl: CONFIG.PORTAL_URL, popup: false })]);
+  }
+
+  const issueLayer = new GraphicsLayer();
+  const reportLayer = new GraphicsLayer();
+  const map = new EsriMap({ basemap: CONFIG.BASEMAP, layers: [issueLayer, reportLayer] });
+  const view = new MapView({ container: "map", map, center: CONFIG.MAP_CENTER, zoom: CONFIG.MAP_ZOOM, constraints: { snapToZoom: false } });
+  view.popupEnabled = true;
+  let featureLayer = null, canLogContact = false, canEdit = false, hasAttachments = true;
+  let canDelete = false, canAddPhotos = false, hasHistory = false, historyMaxLen = 0, hasContactCount = false, hasCaseField = false;
+
+  /* ----- Sign-in ----- */
+  async function signIn(){
+    const portal = new Portal({ url: CONFIG.PORTAL_URL, authMode: "immediate" });
+    await portal.load();
+    const u = portal.user;
+    if (!u) throw new Error("No signed-in user");
+    state.user = u.username;
+    state.me = { username: u.username, name: lookupName(u.username) || u.fullName || u.username, email: u.email || "" };
+    $("#who").innerHTML = `Signed in as <b>${esc(state.me.name)}</b> · <button class="linkbtn" id="signOutBtn" type="button">Sign out</button>`;
+    $("#signOutBtn").onclick = () => { esriId.destroyCredentials(); location.reload(); };
+  }
+  function showSignedOut(err){
+    console.warn(err);
+    state.issues = []; issueLayer.removeAll();
+    $("#who").textContent = "";
+    $("#reportBtn").disabled = true;
+    $("#pane").innerHTML = `
+      <h2 style="margin:.2em 0 .4em;font-size:1.25rem">Sign in to continue</h2>
+      <p>Use your ${esc(new URL(CONFIG.PORTAL_URL).hostname)} account to see, report and follow up on issues.</p>
+      <button class="btn primary" id="signInBtn" type="button">Sign in</button>`;
+    $("#signInBtn").onclick = () => loadIssues();
+  }
+
+  /* ----- Load data ----- */
+  async function loadIssues(){
+    if (!state.me) {
+      try { await signIn(); } catch (err) { showSignedOut(err); return; }
+      $("#reportBtn").disabled = false;
+    }
+    try {
+      if (!featureLayer) {
+        featureLayer = new FeatureLayer({ url: CONFIG.FEATURE_LAYER_URL, outFields: ["*"] });
+        await featureLayer.load();
+        const ops = featureLayer.capabilities?.operations || {};
+        const names = featureLayer.fields.map(f => f.name.toLowerCase());
+        canLogContact = names.includes(F.lastContacted.toLowerCase()) && ops.supportsUpdate;
+        hasAttachments = !!featureLayer.capabilities?.data?.supportsAttachment;
+        canEdit = !!ops.supportsUpdate && featureLayer.editingEnabled !== false;
+        canDelete = CONFIG.ALLOW_DELETE && !!ops.supportsDelete && featureLayer.editingEnabled !== false;
+        canAddPhotos = hasAttachments && (!!ops.supportsAdd || !!ops.supportsUpdate) && featureLayer.editingEnabled !== false;
+        const realField = n => featureLayer.fields.find(f => f.name.toLowerCase() === String(n || "").toLowerCase());
+        hasContactCount = !!realField(F.contactCount);
+        const cf = realField(F.case311); hasCaseField = !!cf; if (cf) F.case311 = cf.name;
+        const hf = realField(F.statusHistory);
+        hasHistory = !!hf && hf.type === "string";
+        if (hf) { F.statusHistory = hf.name; historyMaxLen = hf.length || 0; }
+        const sfReal = realField(F.status);
+        if (sfReal) F.status = sfReal.name;
+        else banner("err", `The layer has no field named <b>${esc(F.status)}</b>, so status changes can’t be saved to it. Set <b>FIELDS.status</b> to the name of your status field.`);
+        const sf = featureLayer.getField(F.status);
+        STATUS_DOMAIN = sf?.domain?.type === "coded-value" ? sf.domain.codedValues : null;
+        if (!canEdit) banner("warn", "Your account can’t edit this layer, so changing status and moving points are turned off. Ask the layer owner to allow updates.");
+        if (!canLogContact) banner("warn", `Reminders won’t be logged: add a Date field named <b>${esc(F.lastContacted)}</b> (and an Integer field <b>${esc(F.contactCount)}</b>) to the layer and allow updates.`);
+        if (!hasHistory) banner("warn", `Status changes won’t be recorded: add a Text field named <b>${esc(F.statusHistory)}</b> with a length of 10000 to the layer.`);
+      }
+      const res = await featureLayer.queryFeatures({
+        where: "1=1", outFields: ["*"], returnGeometry: true,
+        outSpatialReference: { wkid: 4326 }, orderByFields: [`${F.submittedAt} DESC`], num: 2000
+      });
+      const oidField = featureLayer.objectIdField || F.id;
+      // Latest status = the most recent change in status_history; falls back to the status field, then DEFAULT_STATUS
+      const currentStatus = a => {
+        const h = hasHistory ? parseHistory(a[F.statusHistory]) : [];
+        const last = h.filter(e => e && e.to).sort((x, y) => (x.at || 0) - (y.at || 0)).pop();
+        if (last) return statusCode(last.to);
+        const v = a[F.status];
+        return v == null || String(v).trim() === "" ? statusCode(CONFIG.DEFAULT_STATUS || "New") : v;
+      };
+      state.issues = res.features.filter(f => f.geometry).map(f => {
+        const a = f.attributes;
+        const toDate = v => v == null ? null : new Date(v);
+        return {
+          id: a[oidField], lat: f.geometry.latitude ?? f.geometry.y, lon: f.geometry.longitude ?? f.geometry.x,
+          issueType: a[F.issueType], asset: a[F.asset], assignedTo: a[F.assignedTo], status: currentStatus(a),
+          notes: a[F.notes], locationDesc: a[F.locationDesc], submittedBy: displayName(a[F.submittedBy]),
+          submittedAt: toDate(a[F.submittedAt]), lastContacted: toDate(a[F.lastContacted]),
+          contactCount: Number(a[F.contactCount]) || 0,
+          history: hasHistory ? parseHistory(a[F.statusHistory]) : [],
+          case311: hasCaseField ? a[F.case311] : null
+        };
+      });
+      state.live = true;
+      render();
+    } catch (err) {
+      console.error(err);
+      banner("err", `Couldn’t load issues from the feature layer: ${esc(err.message || err)}. Check FEATURE_LAYER_URL and that your account can view the layer.`);
+      render();
+    }
+  }
+
+  /* ----- Photos (attachments) ----- */
+  // Returns [{ id, name, contentType, blob, src }]. Photos are downloaded once so they can be shown and emailed.
+  async function getPhotos(issue){
+    if (!featureLayer || !hasAttachments) return [];
+    if (!state.photoCache[issue.id]) {
+      state.photoCache[issue.id] = (async () => {
+        const res = await featureLayer.queryAttachments({ objectIds: [issue.id] });
+        const infos = (res[issue.id] || []).filter(a => /^image\//.test(a.contentType || "image/"));
+        return Promise.all(infos.map(async a => {
+          try {
+            const r = await esriRequest(a.url, { responseType: "blob" });
+            return { id: a.id, name: a.name || `photo-${a.id}.jpg`, contentType: a.contentType, blob: r.data, src: URL.createObjectURL(r.data) };
+          } catch (e) {
+            console.warn(e);
+            return { id: a.id, name: a.name || `photo-${a.id}.jpg`, contentType: a.contentType, blob: null, src: a.url };
+          }
+        }));
+      })();
+    }
+    try { return await state.photoCache[issue.id]; }
+    catch (e) { console.warn(e); delete state.photoCache[issue.id]; return []; }
+  }
+
+  async function addPhoto(issue, file){
+    const fd = new FormData();
+    fd.append("attachment", file, file.name || "photo.jpg");
+    const r = await featureLayer.addAttachment(new Graphic({ attributes: { [featureLayer.objectIdField]: issue.id } }), fd);
+    if (r?.error) throw r.error;
+  }
+
+  /* ----- Small map image for emails ----- */
+  function getMapSnapshot(i){
+    const key = `${i.id}:${i.lat.toFixed(6)},${i.lon.toFixed(6)}:${statusInfo(i.status).color}`;
+    if (!state.mapCache[key]) {
+      state.mapCache[key] = (async () => {
+        const holder = document.createElement("div");
+        holder.style.cssText = "position:fixed;left:-10000px;top:0;width:640px;height:400px;";
+        document.body.appendChild(holder);
+        const gl = new GraphicsLayer();
+        gl.add(new Graphic({
+          geometry: { type: "point", longitude: i.lon, latitude: i.lat },
+          symbol: { type: "simple-marker", color: statusInfo(i.status).color, size: 20, outline: { color: "white", width: 3 } }
+        }));
+        const v = new MapView({
+          container: holder, map: new EsriMap({ basemap: CONFIG.BASEMAP, layers: [gl] }),
+          center: [i.lon, i.lat], zoom: CONFIG.EMAIL_MAP_ZOOM, ui: { components: [] }, constraints: { snapToZoom: false }
+        });
+        try {
+          await v.when();
+          await Promise.race([reactiveUtils.whenOnce(() => !v.updating), new Promise(r => setTimeout(r, 10000))]);
+          await new Promise(r => setTimeout(r, 400));
+          const shot = await v.takeScreenshot({ format: "jpg", quality: 85 });
+          state.mapReady[key] = shot.dataUrl;
+          return shot.dataUrl;
+        } finally { v.destroy(); holder.remove(); }
+      })().catch(e => { delete state.mapCache[key]; throw e; });
+    }
+    return state.mapCache[key];
+  }
+  const mapReadyFor = i => state.mapReady[`${i.id}:${i.lat.toFixed(6)},${i.lon.toFixed(6)}:${statusInfo(i.status).color}`];
+
+  /* ----- History and logged actions ----- */
+  // Reads the latest history from the layer first so changes made by teammates aren't overwritten
+  async function appendHistory(issue, entry){
+    const cur = await featureLayer.queryFeatures({ objectIds: [issue.id], outFields: [F.statusHistory], returnGeometry: false });
+    const history = parseHistory(cur.features[0]?.attributes?.[F.statusHistory]);
+    history.push(entry);
+    let json = JSON.stringify(history);
+    while (historyMaxLen && json.length > historyMaxLen && history.length > 1) { history.shift(); json = JSON.stringify(history); }
+    return { history, json };
+  }
+  const statusValue = code => { const fld = featureLayer.getField(F.status); return fld && /integer|double|single/.test(fld.type) ? Number(code) : code; };
+  const statusCode = label => STATUS_DOMAIN?.find(c => norm(c.name) === norm(label))?.code ?? label;
+  const willChangeTo = (issue, label) => { const cur = statusInfo(issue.status); return !!label && canEdit && !cur.done && norm(cur.value) !== norm(label); };
+
+  // Logs a sent email or a 311 request: contact date and count, the new status, the 311 case number and a history entry, in one save
+  async function recordAction(issue, { toLabel, note, caseNo }){
+    const now = Date.now(), cur = statusInfo(issue.status);
+    const change = willChangeTo(issue, toLabel);
+    const newStatus = change ? statusCode(toLabel) : issue.status;
+    const attributes = { [featureLayer.objectIdField]: issue.id };
+    if (canLogContact) {
+      attributes[F.lastContacted] = now;
+      if (hasContactCount) attributes[F.contactCount] = (issue.contactCount || 0) + 1;
+    }
+    if (change) attributes[F.status] = statusValue(newStatus);
+    if (caseNo && hasCaseField) attributes[F.case311] = caseNo;
+    let history = null;
+    if (hasHistory && canEdit) {
+      const h = await appendHistory(issue, { at: now, by: state.me?.username || "", from: cur.value, to: statusInfo(newStatus).value, note });
+      history = h.history; attributes[F.statusHistory] = h.json;
+    }
+    if (Object.keys(attributes).length > 1) {
+      const r = await featureLayer.applyEdits({ updateFeatures: [new Graphic({ attributes })] });
+      const err = r.updateFeatureResults?.[0]?.error;
+      if (err) throw err;
+    }
+    issue.lastContacted = new Date(now); issue.contactCount = (issue.contactCount || 0) + 1;
+    if (change) issue.status = newStatus;
+    if (history) issue.history = history;
+    if (caseNo) issue.case311 = caseNo;
+    return { changed: change, status: statusInfo(issue.status).value };
+  }
+
+  /* ----- Editing status and location ----- */
+  async function saveEdit(issue, { status, lat, lon }){
+    const attributes = { [featureLayer.objectIdField]: issue.id };
+    let history = null;
+    if (status !== undefined) {
+      attributes[F.status] = statusValue(status);
+      if (hasHistory) {
+        const h = await appendHistory(issue, { at: Date.now(), by: state.me?.username || "", from: statusInfo(issue.status).value, to: statusInfo(status).value });
+        history = h.history; attributes[F.statusHistory] = h.json;
+      }
+    }
+    let geometry;
+    if (lat != null) {
+      geometry = new Point({ longitude: lon, latitude: lat });
+      const sr = featureLayer.spatialReference;
+      if (sr && !sr.isWGS84) {
+        if (sr.isWebMercator) geometry = webMercatorUtils.geographicToWebMercator(geometry);
+        else { await projection.load(); geometry = projection.project(geometry, sr); }
+      }
+    }
+    const r = await featureLayer.applyEdits({ updateFeatures: [new Graphic({ attributes, geometry })] });
+    const err = r.updateFeatureResults?.[0]?.error;
+    if (err) throw err;
+    return { history };
+  }
+
+  async function deleteIssue(issue){
+    const r = await featureLayer.applyEdits({ deleteFeatures: [{ objectId: issue.id }] });
+    const err = r.deleteFeatureResults?.[0]?.error;
+    if (err) throw err;
+    state.issues = state.issues.filter(x => x.id !== issue.id);
+    delete state.photoCache[issue.id];
+  }
+
+  /* ----- Filtering ----- */
+  function filtered(){
+    const f = state.filters, q = f.q.trim().toLowerCase();
+    const cutoff = f.days === "all" ? 0 : Date.now() - Number(f.days)*DAY;
+    return state.issues.filter(i => {
+      const st = statusInfo(i.status);
+      if (f.status === "open" && st.done) return false;
+      if (f.status && f.status !== "open" && st.value !== f.status) return false;
+      if (f.asset && i.asset !== f.asset) return false;
+      if (f.partner && i.assignedTo !== f.partner) return false;
+      if (cutoff && (!i.submittedAt || i.submittedAt.getTime() < cutoff)) return false;
+      if (q && ![i.id, i.issueType, i.asset, i.assignedTo, i.locationDesc, i.notes, i.submittedBy].join(" ").toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }
+
+  /* ----- Map drawing ----- */
+  function drawMarkers(list){
+    issueLayer.removeAll();
+    const showAll = state.view === "report";
+    (showAll ? state.issues : list).forEach(i => {
+      const st = statusInfo(i.status), sel = i.id === state.selectedId;
+      issueLayer.add(new Graphic({
+        geometry: { type: "point", longitude: i.lon, latitude: i.lat },
+        symbol: { type: "simple-marker", color: st.color, size: sel ? 18 : 12, outline: { color: sel ? "#16302A" : "white", width: sel ? 3 : 1.5 } },
+        attributes: { id: i.id }
+      }));
+    });
+  }
+  function drawReport(){
+    reportLayer.removeAll();
+    view.container.style.cursor = (state.view === "report" || state.moving) ? "crosshair" : "";
+    const mv = state.moving, mi = mv && findIssue(mv.id);
+    if (mi && mv.lat != null) {
+      reportLayer.add(new Graphic({
+        geometry: { type: "polyline", paths: [[[mi.lon, mi.lat], [mv.lon, mv.lat]]], spatialReference: { wkid: 4326 } },
+        symbol: { type: "simple-line", color: [11, 110, 79, 0.9], width: 2, style: "dash" }
+      }));
+      reportLayer.add(new Graphic({
+        geometry: { type: "point", longitude: mv.lon, latitude: mv.lat },
+        symbol: { type: "simple-marker", style: "diamond", color: "#0B6E4F", size: 20, outline: { color: "white", width: 2.5 } }
+      }));
+    }
+    const r = state.report;
+    if (state.view !== "report" || r.lat == null) return;
+    reportLayer.add(new Graphic({
+      geometry: new Circle({ center: [r.lon, r.lat], radius: Number(r.radius) || 0, radiusUnit: "feet", geodesic: true }),
+      symbol: { type: "simple-fill", color: [11, 110, 79, 0.12], outline: { color: [11, 110, 79, 0.9], width: 1.5, style: "dash" } }
+    }));
+    reportLayer.add(new Graphic({
+      geometry: { type: "point", longitude: r.lon, latitude: r.lat },
+      symbol: { type: "simple-marker", style: "diamond", color: "#0B6E4F", size: 20, outline: { color: "white", width: 2.5 } }
+    }));
+  }
+
+  view.on("click", async e => {
+    if (state.moving) {
+      state.moving.lat = e.mapPoint.latitude; state.moving.lon = e.mapPoint.longitude; render(); return;
+    }
+    if (state.view === "report") {
+      state.report.lat = e.mapPoint.latitude; state.report.lon = e.mapPoint.longitude;
+      state.report.confirmed = false; render(); return;
+    }
+    const hit = await view.hitTest(e, { include: [issueLayer] });
+    const g = hit.results.find(r => r.graphic)?.graphic;
+    if (g) openDetail(g.attributes.id, false);
+  });
+
+  /* ----- Views ----- */
+  function render(){
+    const list = filtered();
+    drawMarkers(list); drawReport();
+    if (state.view === "detail") renderDetail();
+    else if (state.view === "report") renderReport();
+    else renderList(list);
+  }
+
+  function legend(){
+    return `<div class="legend">${CONFIG.STATUSES.map(s => `<span><span class="dot" style="background:${s.color}"></span>${esc(s.value)}</span>`).join("")}</div>`;
+  }
+
+  function renderList(list){
+    const f = state.filters;
+    const assets = [...new Set([...CONFIG.ASSET_TYPES, ...state.issues.map(i => i.asset).filter(Boolean)])];
+    const partners = [...new Set([...Object.keys(CONFIG.PARTNERS), ...state.issues.map(i => i.assignedTo).filter(Boolean)])];
+    $("#pane").innerHTML = `
+      <div class="filters">
+        <label class="f full">Search
+          <input type="search" id="fQ" value="${esc(f.q)}" placeholder="Location, issue, notes, issue #"></label>
+        <label class="f">Status
+          <select id="fStatus"><option value="open"${f.status==="open"?" selected":""}>All open</option><option value=""${f.status===""?" selected":""}>Any status</option>${CONFIG.STATUSES.map(s=>`<option${s.value===f.status?" selected":""}>${esc(s.value)}</option>`).join("")}</select></label>
+        <label class="f">Submitted
+          <select id="fDays">${[["7","Last 7 days"],["30","Last 30 days"],["90","Last 90 days"],["365","Last year"],["all","Any time"]].map(([v,l])=>`<option value="${v}"${v===f.days?" selected":""}>${l}</option>`).join("")}</select></label>
+        <label class="f">Asset
+          <select id="fAsset">${options(assets, f.asset, "All assets")}</select></label>
+        <label class="f">Assigned to
+          <select id="fPartner">${options(partners, f.partner, "All partners")}</select></label>
+      </div>
+      ${legend()}
+      <div class="count">${list.length} ${list.length === 1 ? "issue" : "issues"} shown</div>
+      ${list.length ? `<ul class="list">${list.map(i => {
+        const st = statusInfo(i.status);
+        return `<li><button class="row${i.id===state.selectedId?" sel":""}" type="button" data-id="${esc(i.id)}">
+          <span class="plate">#${esc(i.id)}</span>
+          <span class="t">${esc(i.issueType || "")} ${esc(i.asset || "Unknown asset")}</span>
+          <span class="when">${esc(ago(i.submittedAt))}</span>
+          <span class="s"><span class="dot" style="background:${st.color}"></span>${esc(st.value)} · ${esc(i.locationDesc || "No location description")} · ${esc(i.assignedTo || "Unassigned")}</span>
+        </button></li>`; }).join("")}</ul>`
+        : `<p class="muted">No issues match these filters. Widen the date range or set Status to “Any status”.</p>`}
+    `;
+    const upd = (id, key) => $(id).addEventListener(id === "#fQ" ? "input" : "change", e => { state.filters[key] = e.target.value; render(); if (id === "#fQ") { const el = $("#fQ"); el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
+    upd("#fQ","q"); upd("#fStatus","status"); upd("#fDays","days"); upd("#fAsset","asset"); upd("#fPartner","partner");
+    $("#pane").querySelectorAll("button.row").forEach(b => b.addEventListener("click", () => openDetail(b.dataset.id, true)));
+  }
+
+  function findIssue(id){ return state.issues.find(i => String(i.id) === String(id)); }
+
+  function openDetail(id, zoom){
+    const i = findIssue(id); if (!i) return;
+    state.prevView = state.view === "report" ? "report" : "list";
+    state.selectedId = i.id; state.view = "detail"; state.moving = null; render();
+    if (zoom) view.goTo({ center: [i.lon, i.lat], zoom: Math.max(view.zoom, 17) }).catch(() => {});
+    $("#pane").scrollTop = 0;
+  }
+
+  function historyHtml(i){
+    const h = i.history || [];
+    const firstStatus = statusInfo(h[0] ? h[0].from : i.status).value;
+    const rows = [
+      { color: statusInfo(firstStatus).color, what: `Submitted as ${esc(firstStatus)}`, who: i.submittedBy || "unknown", at: i.submittedAt },
+      ...h.map(raw => {
+        const e = { ...raw, from: raw.from == null ? raw.from : statusInfo(raw.from).value, to: statusInfo(raw.to).value };
+        const changed = e.from && e.to && e.from !== e.to;
+        return {
+          color: statusInfo(e.to).color,
+          what: changed ? `Changed to ${esc(e.to)} <span class="muted small">from ${esc(e.from)}</span>` : esc(e.note || `Status ${e.to}`),
+          sub: changed && e.note ? esc(e.note) : "",
+          who: displayName(e.by) || "unknown", at: e.at ? new Date(e.at) : null
+        };
+      })
+    ];
+    return `<div class="sect">
+      <div class="sect-h"><h3>Status history</h3></div>
+      <ol class="timeline">${rows.map(r => `<li><span class="dot" style="background:${r.color}"></span>
+        <b>${r.what}</b>${r.sub ? `<br><span class="small">${r.sub}</span>` : ""}<br><span class="muted small">${esc(r.who)}, ${esc(fmtDateTime(r.at))}</span></li>`).join("")}</ol>
+      ${!hasHistory ? `<p class="muted small">Status changes aren’t being recorded yet. Add a <b>${esc(F.statusHistory)}</b> field to the layer to start.</p>` : ""}
+    </div>`;
+  }
+
+  async function renderDetail(){
+    const i = findIssue(state.selectedId); if (!i) { state.view = "list"; return render(); }
+    const st = statusInfo(i.status);
+    const partner = CONFIG.PARTNERS[i.assignedTo];
+    $("#pane").innerHTML = `
+      <button class="btn small back" id="backBtn" type="button">${state.prevView === "report" ? "Back to new report" : "Back to all issues"}</button>
+      <div class="detail">
+        <span class="plate">Issue #${esc(i.id)}</span>
+        <h2>${esc(i.issueType || "Issue")} on ${esc((i.asset || "unknown asset").toLowerCase())}</h2>
+        <span class="chip"><span class="dot" style="background:${st.color}"></span>${esc(st.value)}</span>
+        ${canEdit ? `<div class="editrow">
+          <label class="f">Change status<select id="dStatus">${statusOptions(i.status)}</select></label>
+          <button class="btn small" id="saveStatus" type="button" disabled>Save status</button>
+        </div>` : ""}
+        <dl class="facts">
+          <dt>Location</dt><dd>${esc(i.locationDesc || "—")}</dd>
+          <dt>Asset</dt><dd>${esc(i.asset || "—")}</dd>
+          <dt>Assigned to</dt><dd>${esc(i.assignedTo || "Unassigned")}${partner ? `<br><span class="muted small">${esc(partner.email)}</span>` : ""}</dd>
+          <dt>Submitted</dt><dd>${esc(fmtDateTime(i.submittedAt))}<br><span class="muted small">by ${esc(i.submittedBy || "unknown")}</span></dd>
+          ${i.case311 ? `<dt>311 case</dt><dd>#${esc(i.case311)}</dd>` : ""}
+          <dt>${is311(i) ? "Reported to 311" : "Partner contacted"}</dt><dd>${i.lastContacted ? `${esc(ago(i.lastContacted))} <span class="muted small">(${i.contactCount || 1} ${(i.contactCount||1) === 1 ? "time" : "times"})</span>` : "Not yet"}</dd>
+        </dl>
+        <div class="notes">${i.notes ? esc(i.notes) : '<span class="muted">No notes</span>'}</div>
+
+        <div class="sect">
+          <div class="sect-h"><h3>Photos</h3>
+            ${canAddPhotos ? `<button class="btn small" id="addPhotoBtn" type="button">Add photos</button>
+            <input type="file" id="addPhotoInput" accept="image/*" multiple hidden>` : ""}
+          </div>
+          <div class="photos" id="photos"><span class="muted small">Loading photos…</span></div>
+        </div>
+
+        ${historyHtml(i)}
+
+        ${state.moving?.id === i.id ? `<div class="movebox">
+          <b>Moving issue #${esc(i.id)}</b>
+          <p>${state.moving.lat == null ? "Click the map where this issue actually is."
+            : `New spot is ${Math.round(distFt(i.lat, i.lon, state.moving.lat, state.moving.lon))} ft from the old one. Click again to adjust.`}</p>
+          <div class="actions" style="margin-top:0">
+            <button class="btn primary" id="saveMove" type="button"${state.moving.lat == null ? " disabled" : ""}>Save new location</button>
+            <button class="btn" id="cancelMove" type="button">Cancel</button>
+          </div>
+        </div>` : `<div class="actions">
+          ${is311(i) ? `<button class="btn primary" id="btn311" type="button">Submit to Philly311</button>`
+            : `<button class="btn primary" id="remindBtn" type="button">Send reminder</button>
+          <button class="btn" id="emailBtn" type="button">Email partner</button>`}
+          <button class="btn" id="zoomBtn" type="button">Zoom to issue</button>
+          ${canEdit ? `<button class="btn" id="moveBtn" type="button">Move location</button>` : ""}
+          ${canDelete ? `<button class="btn danger" id="deleteBtn" type="button">Delete issue</button>` : ""}
+        </div>`}
+      </div>`;
+    const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+    on("#backBtn", () => { state.moving = null; state.view = state.prevView || "list"; state.selectedId = state.view === "list" ? state.selectedId : null; render(); });
+    on("#remindBtn", () => openComposer(i, "reminder"));
+    on("#btn311", () => open311(i));
+    on("#emailBtn", () => openComposer(i, "first"));
+    on("#zoomBtn", () => view.goTo({ center: [i.lon, i.lat], zoom: 19 }).catch(() => {}));
+    on("#moveBtn", () => { state.moving = { id: i.id, lat: null, lon: null }; render(); view.goTo({ center: [i.lon, i.lat], zoom: Math.max(view.zoom, 18) }).catch(() => {}); });
+    on("#cancelMove", () => { state.moving = null; render(); });
+    on("#deleteBtn", () => confirmDelete(i));
+    on("#saveMove", async () => {
+      const b = $("#saveMove"); b.disabled = true; b.textContent = "Saving…";
+      try {
+        await saveEdit(i, { lat: state.moving.lat, lon: state.moving.lon });
+        i.lat = state.moving.lat; i.lon = state.moving.lon; state.moving = null;
+        toast(`Issue #${i.id} moved`); render();
+      } catch (err) {
+        console.error(err); b.disabled = false; b.textContent = "Save new location";
+        toast(`Location wasn’t saved: ${err.message || err}`);
+      }
+    });
+    const ds = $("#dStatus");
+    if (ds) {
+      ds.onchange = () => { $("#saveStatus").disabled = ds.value === String(i.status); };
+      on("#saveStatus", async () => {
+        const b = $("#saveStatus"); b.disabled = true; b.textContent = "Saving…";
+        try {
+          const { history } = await saveEdit(i, { status: ds.value });
+          i.status = ds.value; if (history) i.history = history;
+          toast(`Status changed to ${statusInfo(i.status).value}`); render();
+        } catch (err) {
+          console.error(err); b.disabled = false; b.textContent = "Save status";
+          toast(`Status wasn’t saved: ${err.message || err}`);
+        }
+      });
+    }
+    const inp = $("#addPhotoInput");
+    on("#addPhotoBtn", () => inp.click());
+    if (inp) inp.onchange = async () => {
+      const files = [...inp.files]; if (!files.length) return;
+      const b = $("#addPhotoBtn"); b.disabled = true;
+      let done = 0;
+      try {
+        for (const file of files) { b.textContent = `Uploading ${done + 1} of ${files.length}…`; await addPhoto(i, file); done++; }
+        toast(`${done} ${done === 1 ? "photo" : "photos"} added to issue #${i.id}`);
+      } catch (err) {
+        console.error(err);
+        toast(`Photo upload stopped${done ? ` after ${done}` : ""}: ${err.message || err}`);
+      } finally { delete state.photoCache[i.id]; render(); }
+    };
+    const photos = await getPhotos(i);
+    const box = $("#photos"); if (!box || state.selectedId !== i.id) return;
+    box.innerHTML = photos.length
+      ? photos.map(p => `<a href="${esc(p.src)}" target="_blank" rel="noopener"><img src="${esc(p.src)}" alt="Photo of issue #${esc(i.id)}" loading="lazy"></a>`).join("")
+      : `<span class="muted small">No photos yet${canAddPhotos ? ". Select Add photos to attach one." : ""}</span>`;
+  }
+
+  function confirmDelete(i){
+    const dlg = $("#composer");
+    dlg.innerHTML = `
+      <div class="dlg">
+        <h2 id="composerTitle">Delete issue #${esc(i.id)}?</h2>
+        <p style="margin:0">This permanently removes the point, its photos and its status history from the layer for everyone on the team. It can’t be undone.</p>
+        <div class="actions">
+          <button class="btn" type="button" id="dNo">Keep issue</button>
+          <button class="btn danger solid" type="button" id="dYes">Delete issue</button>
+        </div>
+      </div>`;
+    $("#dNo").onclick = () => dlg.close();
+    $("#dYes").onclick = async () => {
+      const b = $("#dYes"); b.disabled = true; b.textContent = "Deleting…";
+      try {
+        await deleteIssue(i);
+        dlg.close(); state.selectedId = null; state.view = "list"; state.moving = null;
+        toast(`Issue #${i.id} deleted`); render();
+      } catch (err) {
+        console.error(err); b.disabled = false; b.textContent = "Delete issue";
+        toast(`Issue wasn’t deleted: ${err.message || err}`);
+      }
+    };
+    dlg.showModal();
+  }
+
+  /* ----- Report flow with duplicate check ----- */
+  function matchesFor(r){
+    if (r.lat == null) return [];
+    const cutoff = Date.now() - Number(r.days || 0)*DAY;
+    return state.issues
+      .map(i => ({ i, d: distFt(r.lat, r.lon, i.lat, i.lon) }))
+      .filter(({ i, d }) => d <= Number(r.radius) && i.submittedAt && i.submittedAt.getTime() >= cutoff)
+      .map(m => ({ ...m, same: !!r.asset && m.i.asset === r.asset }))
+      .sort((a, b) => (b.same - a.same) || (a.d - b.d));
+  }
+
+  function surveyUrl(r){
+    const SF = CONFIG.SURVEY_FIELDS, parts = [`center=${r.lat.toFixed(6)},${r.lon.toFixed(6)}`];
+    if (SF.issueType && r.issueType) parts.push(`field:${SF.issueType}=${encodeURIComponent(r.issueType)}`);
+    if (SF.asset && r.asset) parts.push(`field:${SF.asset}=${encodeURIComponent(r.asset)}`);
+    if (SF.locationDesc && r.locationDesc) parts.push(`field:${SF.locationDesc}=${encodeURIComponent(r.locationDesc)}`);
+    return `${CONFIG.SURVEY_URL}`;
+  }
+
+  function renderReport(){
+    const r = state.report, placed = r.lat != null, described = !!(r.issueType && r.asset);
+    const m = matchesFor(r), sameCount = m.filter(x => x.same).length;
+    const canSubmit = placed && described && (m.length === 0 || r.confirmed);
+    $("#pane").innerHTML = `
+      <button class="btn small back" id="cancelReport" type="button">Cancel new report</button>
+      <h2 style="margin:.2em 0 .8em;font-size:1.25rem">Report an issue</h2>
+      <ol class="steps">
+        <li class="${placed ? "done" : ""}"><span class="step-n">1</span>
+          <h3>Place it on the map</h3>
+          <p class="small muted" style="margin:0 0 6px">${placed ? `Placed at ${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}. Click the map again to move it.` : "Click the map where the issue is."}</p>
+          <button class="btn small" id="geoBtn" type="button">Use my location</button>
+        </li>
+        <li class="${described ? "done" : ""}"><span class="step-n">2</span>
+          <h3>Describe it</h3>
+          <div class="filters" style="margin:0">
+            <label class="f">Issue<select id="rType">${options(CONFIG.ISSUE_TYPES, r.issueType, "Choose…")}</select></label>
+            <label class="f">Asset<select id="rAsset">${options(CONFIG.ASSET_TYPES, r.asset, "Choose…")}</select></label>
+            <label class="f full">Location description (optional)<input type="text" id="rLoc" value="${esc(r.locationDesc)}" placeholder="e.g. 1600 Market St."></label>
+          </div>
+        </li>
+        <li class="${placed && described ? "done" : ""}"><span class="step-n">3</span>
+          <h3>Check for earlier reports</h3>
+          <div class="inline">
+            <label class="f">Within (feet)<input type="number" id="rRadius" min="10" step="10" value="${esc(r.radius)}"></label>
+            <label class="f">Submitted in last (days)<input type="number" id="rDays" min="1" value="${esc(r.days)}"></label>
+          </div>
+          ${!placed ? `<p class="small muted">Place the issue on the map to see nearby reports.</p>`
+            : m.length === 0 ? `<p class="small">No reports within ${esc(r.radius)} ft in the last ${esc(r.days)} days. This looks new.</p>`
+            : `<p class="small">${m.length} nearby ${m.length === 1 ? "report" : "reports"}${sameCount ? `, ${sameCount} on the same asset type` : ""}. If one of these is your issue, send a reminder instead of a new report.</p>
+              ${m.map(({ i, d, same }) => { const st = statusInfo(i.status); return `
+              <div class="match${same ? " same" : ""}">
+                <div class="top"><span class="plate" style="font-size:.78rem">#${esc(i.id)}</span><b>${esc(i.issueType)} · ${esc(i.asset)}</b>${same ? '<span class="chip">Same asset</span>' : ""}</div>
+                <div class="muted small">${Math.round(d)} ft away · <span class="dot" style="background:${st.color}"></span>${esc(st.value)} · ${esc(ago(i.submittedAt))} by ${esc(i.submittedBy || "unknown")}</div>
+                <div class="small">${esc(i.locationDesc || "")}</div>
+                <div class="acts">
+                  <button class="btn small" type="button" data-open="${esc(i.id)}">View details</button>
+                  ${st.done ? "" : `<button class="btn small" type="button" data-remind="${esc(i.id)}">${is311(i) ? "Submit to 311 instead" : "Send reminder instead"}</button>`}
+                </div>
+              </div>`; }).join("")}`}
+        </li>
+        <li><span class="step-n">4</span>
+          <h3>Submit in Survey123</h3>
+          ${m.length ? `<label class="check"><input type="checkbox" id="rConfirm"${r.confirmed ? " checked" : ""}> I reviewed the reports above and this is a different issue.</label>` : ""}
+          <button class="btn primary" id="openSurvey" type="button"${canSubmit ? "" : " disabled"}>Open Survey123 form</button>
+          <p class="small muted">The form opens in a new tab with the location, issue and asset filled in. After you submit it, select Refresh here to see it on the map.</p>
+        </li>
+      </ol>`;
+    $("#cancelReport").onclick = () => { state.view = "list"; render(); };
+    $("#geoBtn").onclick = () => {
+      if (!navigator.geolocation) return toast("Location isn’t available in this browser.");
+      navigator.geolocation.getCurrentPosition(p => {
+        r.lat = p.coords.latitude; r.lon = p.coords.longitude; r.confirmed = false; render();
+        view.goTo({ center: [r.lon, r.lat], zoom: 18 }).catch(() => {});
+      }, () => toast("Couldn’t get your location. Click the map instead."), { enableHighAccuracy: true, timeout: 10000 });
+    };
+    $("#rType").onchange = e => { r.issueType = e.target.value; render(); };
+    $("#rAsset").onchange = e => { r.asset = e.target.value; r.confirmed = false; render(); };
+    $("#rLoc").oninput = e => { r.locationDesc = e.target.value; };
+    $("#rRadius").onchange = e => { r.radius = Math.max(10, Number(e.target.value) || CONFIG.DUPLICATE_RADIUS_FT); r.confirmed = false; render(); };
+    $("#rDays").onchange = e => { r.days = Math.max(1, Number(e.target.value) || CONFIG.DUPLICATE_DAYS); r.confirmed = false; render(); };
+    const c = $("#rConfirm"); if (c) c.onchange = e => { r.confirmed = e.target.checked; render(); };
+    $("#pane").querySelectorAll("[data-open]").forEach(b => b.onclick = () => openDetail(b.dataset.open, true));
+    $("#pane").querySelectorAll("[data-remind]").forEach(b => b.onclick = () => openComposer(findIssue(b.dataset.remind), "reminder"));
+    $("#openSurvey").onclick = () => {
+      if (CONFIG.DEMO_MODE) { toast("Demo mode: this would open " + surveyUrl(r).slice(0, 80) + "…"); console.log(surveyUrl(r)); return; }
+      window.open(surveyUrl(r), "_blank", "noopener");
+    };
+  }
+
+  $("#reportBtn").onclick = () => {
+    state.report = { lat: null, lon: null, issueType: "", asset: "", locationDesc: "", radius: CONFIG.DUPLICATE_RADIUS_FT, days: CONFIG.DUPLICATE_DAYS, confirmed: false };
+    state.selectedId = null; state.view = "report"; render();
+  };
+  $("#refreshBtn").onclick = async () => { state.photoCache = {}; await loadIssues(); toast("Issues refreshed"); };
+
+  /* ----- Email composer ----- */
+  const whereText = i => i.locationDesc || `${i.lat.toFixed(5)}, ${i.lon.toFixed(5)}`;
+  function buildEmail(i, kind){
+    const p = CONFIG.PARTNERS[i.assignedTo] || { email: "", cc: "" };
+    const st = statusInfo(i.status);
+    const where = whereText(i);
+    const subject = kind === "reminder"
+      ? `Follow-up: ${i.issueType} – ${i.asset} at ${where} (Issue #${i.id})`
+      : `Public space issue: ${i.issueType} – ${i.asset} at ${where} (Issue #${i.id})`;
+    const intro = kind === "reminder"
+      ? `Hello ${i.assignedTo || ""},\n\nWe’re following up on the issue below, first reported ${fmtDate(i.submittedAt)}. Our records show it as “${st.value}”.${i.lastContacted ? ` We last contacted you about it on ${fmtDate(i.lastContacted)}.` : ""}`
+      : `Hello ${i.assignedTo || ""},\n\nWe’d like to report the following issue in the public space:`;
+    const ask = kind === "reminder"
+      ? "Could you share an update or an expected completion date? Please reply to this email and reference the issue number."
+      : "Please reply to this email with any questions, and reference the issue number in future messages so we can track it.";
+    const body = [
+      intro.trim(), "",
+      `Issue #: ${i.id}`,
+      `Issue: ${i.issueType || "—"}`,
+      `Asset: ${i.asset || "—"}`,
+      `Location: ${where}`,
+      `Reported: ${fmtDateTime(i.submittedAt)}`,
+      `Status: ${st.value}`,
+      i.notes ? `Notes: ${i.notes}` : null,
+      "", ask, "", CONFIG.EMAIL_SIGNATURE
+        .replace("{name}", state.me?.name || "")
+        .replace(/\{email\}\n?/, state.me?.email ? state.me.email + "\n" : "").trim()
+    ].filter(l => l !== null).join("\n");
+    return { to: p.email, cc: p.cc || "", subject, body };
+  }
+
+  function outlookUrl(c){
+    const q = [["to", c.to], ["cc", c.cc], ["subject", c.subject], ["body", c.body]]
+      .filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+    return `${CONFIG.OUTLOOK_COMPOSE_URL}?${q}`;
+  }
+  function downloadBlob(blob, name){
+    const u = URL.createObjectURL(blob), a = document.createElement("a");
+    a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 60000);
+  }
+  const dataUrlToBlob = async u => (await fetch(u)).blob();
+  // Browsers only allow copying images as PNG, so the map is converted first
+  async function dataUrlToPng(dataUrl){
+    const img = new Image(); img.src = dataUrl; await img.decode();
+    const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img, 0, 0);
+    return new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error("Couldn’t prepare the map")), "image/png"));
+  }
+  const safeName = s => String(s || "photo.jpg").replace(/[\\/:*?"<>|]+/g, "_");
+  async function copyText(text, msg){
+    try { await navigator.clipboard.writeText(text); toast(msg); }
+    catch { toast("Copy isn’t allowed here. Select the text and copy it manually."); }
+  }
+
+  // Outlook and Philly311 don't allow being shown inside another page, so they open in a small window centered over the dashboard
+  function openPopup(url, name){
+    const w = Math.min(1000, screen.availWidth - 40), h = Math.min(800, screen.availHeight - 60);
+    const left = Math.max(0, (window.screenX || 0) + ((window.outerWidth || w) - w) / 2);
+    const top = Math.max(0, (window.screenY || 0) + ((window.outerHeight || h) - h) / 2);
+    const win = window.open(url, name, `popup=yes,width=${Math.round(w)},height=${Math.round(h)},left=${Math.round(left)},top=${Math.round(top)}`);
+    if (win) { try { win.opener = null; } catch {} try { win.focus(); } catch {} }
+    return win;
+  }
+  function watchClosed(win, dlg, fn){
+    const t = setInterval(() => { if (win.closed) { clearInterval(t); fn(); } }, 800);
+    dlg.addEventListener("close", () => clearInterval(t), { once: true });
+  }
+
+  // Photo and map picker shared by the email and Philly311 windows
+  function attachKit(i, photos){
+    const kit = { map: true, mapFailed: false, photos: new Set(photos.filter(p => p.blob).map(p => p.id)) };
+    kit.html = heading => {
+      const mapUrl = mapReadyFor(i);
+      return `<div>
+        <div class="sect-h"><h3 style="font-size:.95rem">${esc(heading)}</h3><span class="muted small">Untick anything you don’t want to include</span></div>
+        <div class="atts">
+          <label class="att map"><input type="checkbox" id="cMap"${kit.map && !kit.mapFailed ? " checked" : ""}${kit.mapFailed ? " disabled" : ""}>
+            <span id="cMapBox">${mapUrl ? `<img src="${mapUrl}" alt="Map of the issue location">` : `<span class="ph">${kit.mapFailed ? "The map couldn’t be made" : "Making map…"}</span>`}</span>
+            <span class="cap">Location map</span></label>
+          ${photos.map(p => `<label class="att"><input type="checkbox" data-photo="${esc(p.id)}"${kit.photos.has(p.id) ? " checked" : ""}${p.blob ? "" : " disabled"}>
+            <img src="${esc(p.src)}" alt=""><span class="cap">${esc(p.name)}</span></label>`).join("")}
+        </div>
+        ${photos.length ? "" : `<p class="muted small" style="margin:6px 0 0">This issue has no photos. Add them from the issue page to include them.</p>`}
+      </div>`;
+    };
+    kit.buttons = () => `<button class="btn" type="button" id="cCopyMap"${mapReadyFor(i) ? "" : " disabled"}>Copy map</button>
+            <button class="btn" type="button" id="cDownload">Download files</button>`;
+    kit.wire = dlg => {
+      const cm = dlg.querySelector("#cMap"); if (cm) cm.onchange = () => { kit.map = cm.checked; };
+      dlg.querySelectorAll("[data-photo]").forEach(cb => cb.onchange = () => {
+        const id = photos.find(p => String(p.id) === cb.dataset.photo)?.id;
+        cb.checked ? kit.photos.add(id) : kit.photos.delete(id);
+      });
+      const cpm = dlg.querySelector("#cCopyMap");
+      if (cpm) cpm.onclick = async () => {
+        const url = mapReadyFor(i); if (!url) return;
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": dataUrlToPng(url) })]);
+          toast("Map copied. Paste it into the message.");
+        } catch (err) {
+          console.warn(err);
+          toast("This browser won’t copy images. Use Download files and attach the map instead.");
+        }
+      };
+      const dl = dlg.querySelector("#cDownload");
+      if (dl) dl.onclick = async () => {
+        const chosen = photos.filter(p => p.blob && kit.photos.has(p.id));
+        let n = 0;
+        chosen.forEach((p, idx) => { setTimeout(() => downloadBlob(p.blob, safeName(`issue-${i.id}-${p.name}`)), idx * 300); n++; });
+        if (kit.map && !kit.mapFailed) {
+          try {
+            const url = await getMapSnapshot(i);
+            setTimeout(async () => downloadBlob(await dataUrlToBlob(url), `issue-${i.id}-map.jpg`), chosen.length * 300);
+            n++;
+          } catch (err) { console.warn(err); toast("The map couldn’t be made, so only the photos were saved."); }
+        }
+        if (!n) return toast("Nothing is ticked to download.");
+        toast(`${n} ${n === 1 ? "file" : "files"} saved to your Downloads folder`);
+      };
+    };
+    kit.start = dlg => {
+      if (mapReadyFor(i)) return;
+      getMapSnapshot(i).then(url => {
+        const box = dlg.querySelector("#cMapBox"), btn = dlg.querySelector("#cCopyMap");
+        if (box) box.innerHTML = `<img src="${url}" alt="Map of the issue location">`;
+        if (btn) btn.disabled = false;
+      }).catch(err => {
+        console.warn(err); kit.mapFailed = true; kit.map = false;
+        const box = dlg.querySelector("#cMapBox"), cb = dlg.querySelector("#cMap");
+        if (box) box.innerHTML = `<span class="ph">The map couldn’t be made</span>`;
+        if (cb) { cb.checked = false; cb.disabled = true; }
+      });
+    };
+    return kit;
+  }
+
+  async function openComposer(i, kind){
+    if (!i) return;
+    if (is311(i)) return open311(i);
+    const dlg = $("#composer");
+    const photos = await getPhotos(i);
+    const kit = attachKit(i, photos);
+    let opened = false, closed = false, kindNow = kind;
+
+    const draw = (k, keep) => {
+      kindNow = k;
+      const e = keep || buildEmail(i, k);
+      const cool = i.lastContacted && (Date.now() - i.lastContacted.getTime()) < CONFIG.CONTACT_COOLDOWN_DAYS*DAY;
+      const noEmail = !e.to;
+      const after = CONFIG.STATUS_AFTER?.[k === "reminder" ? "reminder" : "firstEmail"];
+      const changes = willChangeTo(i, after);
+      dlg.innerHTML = `
+        <div class="dlg">
+          <h2 id="composerTitle">${k === "reminder" ? "Send a reminder" : "Email partner"} about issue #${esc(i.id)}</h2>
+          <div class="seg" role="radiogroup" aria-label="Email type">
+            <label><input type="radio" name="kind" value="reminder"${k==="reminder"?" checked":""}>Reminder</label>
+            <label><input type="radio" name="kind" value="first"${k==="first"?" checked":""}>First report</label>
+          </div>
+          ${cool ? `<div class="banner warn" style="margin:0">${esc(i.assignedTo)} was contacted about this issue ${esc(ago(i.lastContacted))}. Wait at least ${CONFIG.CONTACT_COOLDOWN_DAYS} days between reminders unless something has changed.</div>` : ""}
+          ${noEmail ? `<div class="banner err" style="margin:0">No email address on file for “${esc(i.assignedTo || "Unassigned")}”. Add it to PARTNERS in the configuration, or type one below.</div>` : ""}
+          <div class="two">
+            <label class="f">To<input type="email" id="cTo" value="${esc(e.to)}" multiple></label>
+            <label class="f">CC<input type="email" id="cCc" value="${esc(e.cc)}" multiple></label>
+          </div>
+          <label class="f">Subject<input type="text" id="cSubject" value="${esc(e.subject)}"></label>
+          <label class="f">Message<textarea id="cBody" rows="12">${esc(e.body)}</textarea></label>
+          ${kit.html("Photos and map to attach")}
+          <ol class="howto">
+            <li>Select <b>Download files</b> to save the ticked photos and map.</li>
+            <li>Select <b>Open in Outlook</b>. A new message opens in a small Outlook window over this page, with everything above filled in.</li>
+            <li>Drag the downloaded files into the message, or select <b>Copy map</b> and paste the map into the body. Send it, then select <b>Log as sent</b> here.</li>
+          </ol>
+          ${opened ? `<div class="banner warn" style="margin:0">${closed ? "The Outlook window closed. " : ""}Once the email is sent, select <b>Log as sent</b>.${changes ? ` The status will change to “${esc(after)}”.` : ""}</div>` : ""}
+          <div class="actions">
+            <button class="btn" type="button" id="cCancel">${opened ? "I didn’t send it" : "Cancel"}</button>
+            <button class="btn" type="button" id="cCopy">Copy message</button>
+            ${kit.buttons()}
+            <button class="btn${opened ? "" : " primary"}" type="button" id="cOutlook">${opened ? "Reopen Outlook" : "Open in Outlook"}</button>
+            ${opened ? `<button class="btn primary" type="button" id="cLogged">Log as sent</button>` : ""}
+          </div>
+        </div>`;
+      const cur = () => ({ to: $("#cTo").value.trim(), cc: $("#cCc").value.trim(), subject: $("#cSubject").value, body: $("#cBody").value });
+      dlg.querySelectorAll('input[name=kind]').forEach(r => r.onchange = ev => draw(ev.target.value));
+      kit.wire(dlg);
+      $("#cCancel").onclick = () => dlg.close();
+      $("#cCopy").onclick = () => { const c = cur(); copyText(`To: ${c.to}\n${c.cc ? `CC: ${c.cc}\n` : ""}Subject: ${c.subject}\n\n${c.body}`, "Message copied"); };
+      $("#cOutlook").onclick = () => {
+        const c = cur();
+        if (!c.to) return toast("Add a recipient first.");
+        const win = openPopup(outlookUrl(c), "pspOutlook");
+        if (!win) return toast("Outlook was blocked from opening. Allow pop-ups for this site and try again.");
+        opened = true; closed = false;
+        draw(k, c);
+        watchClosed(win, dlg, () => { closed = true; if (dlg.open && $("#cTo")) draw(kindNow, cur()); });
+      };
+      const lg = $("#cLogged");
+      if (lg) lg.onclick = async () => {
+        const c = cur();
+        lg.disabled = true; lg.textContent = "Saving…";
+        try {
+          const who = i.assignedTo ? `${i.assignedTo} (${c.to})` : c.to;
+          const res = await recordAction(i, { toLabel: after, note: `${k === "reminder" ? "Reminder" : "Email"} sent to ${who}` });
+          dlg.close();
+          toast(res.changed ? `Logged as sent. Status is now ${res.status}.` : "Logged as sent");
+          render();
+        } catch (err) {
+          console.error(err); lg.disabled = false; lg.textContent = "Log as sent";
+          toast(`Couldn’t save to the layer: ${err.message || err}`);
+        }
+      };
+    };
+    draw(kind);
+    dlg.showModal();
+    kit.start(dlg);
+  }
+
+  /* ----- Philly311 requests (CLIP and other 311 agencies) ----- */
+  function build311(i){
+    return [
+      `${i.issueType || "Issue"}${i.asset ? ` – ${i.asset}` : ""}.`,
+      i.notes || null,
+      `Location: ${whereText(i)} (${i.lat.toFixed(6)}, ${i.lon.toFixed(6)}).`,
+      `Our reference: issue #${i.id}.`
+    ].filter(Boolean).join("\n");
+  }
+
+  async function open311(i){
+    if (!i) return;
+    const dlg = $("#composer");
+    const photos = await getPhotos(i);
+    const kit = attachKit(i, photos);
+    const after = CONFIG.STATUS_AFTER?.philly311;
+    let opened = false, closed = false;
+    const prior = (i.history || []).filter(e => /philly311/i.test(e.note || "")).pop();
+
+    const draw = keep => {
+      const desc = keep ? keep.desc : build311(i);
+      const caseNo = keep ? keep.caseNo : "";
+      const changes = willChangeTo(i, after);
+      dlg.innerHTML = `
+        <div class="dlg">
+          <h2 id="composerTitle">Submit issue #${esc(i.id)} to Philly311</h2>
+          <p class="from">Issues assigned to ${esc(i.assignedTo)} go to Philly311 instead of email. The 311 form can’t be filled in from here, so copy the details below into it.</p>
+          ${prior || i.case311 ? `<div class="banner warn" style="margin:0">This issue was already submitted to Philly311${prior?.at ? ` on ${esc(fmtDate(new Date(prior.at)))}` : ""}${i.case311 ? ` (case #${esc(i.case311)})` : ""}. Check that case before submitting another.</div>` : ""}
+          <div class="inline">
+            <label class="f">Location to enter<input type="text" id="pLoc" value="${esc(whereText(i))}" readonly></label>
+            <button class="btn small" type="button" id="pCopyLoc">Copy</button>
+          </div>
+          <label class="f">Description<textarea id="pDesc" rows="6">${esc(desc)}</textarea></label>
+          <div><button class="btn small" type="button" id="pCopyDesc">Copy description</button></div>
+          ${kit.html("Photos and map for the request")}
+          <ol class="howto">
+            <li>Select <b>Download files</b> to save the photos and map so you can upload them to the request.</li>
+            <li>Select <b>Open Philly311</b>, choose the request type, then paste the location and description.</li>
+            <li>After you submit, type the 311 case number below and select <b>Log as submitted</b>.</li>
+          </ol>
+          <label class="f" style="max-width:260px">311 case number (optional)<input type="text" id="pCase" value="${esc(caseNo)}" inputmode="numeric" placeholder="8-digit number"></label>
+          ${opened ? `<div class="banner warn" style="margin:0">${closed ? "The Philly311 window closed. " : ""}Once the request is submitted, select <b>Log as submitted</b>.${changes ? ` The status will change to “${esc(after)}”.` : ""}</div>` : ""}
+          <div class="actions">
+            <button class="btn" type="button" id="pCancel">Cancel</button>
+            ${kit.buttons()}
+            <button class="btn${opened ? "" : " primary"}" type="button" id="pOpen">${opened ? "Reopen Philly311" : "Open Philly311"}</button>
+            <button class="btn${opened ? " primary" : ""}" type="button" id="pLogged">Log as submitted</button>
+          </div>
+        </div>`;
+      const cur = () => ({ desc: $("#pDesc").value, caseNo: $("#pCase").value.trim() });
+      kit.wire(dlg);
+      $("#pCancel").onclick = () => dlg.close();
+      $("#pCopyLoc").onclick = () => copyText($("#pLoc").value, "Location copied");
+      $("#pCopyDesc").onclick = () => copyText($("#pDesc").value, "Description copied");
+      $("#pOpen").onclick = () => {
+        const keepNow = cur();
+        const win = openPopup(CONFIG.PHILLY311_URL, "pspPhilly311");
+        if (!win) return toast("Philly311 was blocked from opening. Allow pop-ups for this site and try again.");
+        opened = true; closed = false;
+        draw(keepNow);
+        watchClosed(win, dlg, () => { closed = true; if (dlg.open && $("#pDesc")) draw(cur()); });
+      };
+      $("#pLogged").onclick = async () => {
+        const { caseNo } = cur(), b = $("#pLogged");
+        b.disabled = true; b.textContent = "Saving…";
+        try {
+          const res = await recordAction(i, {
+            toLabel: after,
+            note: caseNo ? `Submitted to Philly311 (case #${caseNo})` : "Submitted to Philly311",
+            caseNo
+          });
+          dlg.close();
+          toast(res.changed ? `Logged as submitted. Status is now ${res.status}.` : "Logged as submitted to Philly311");
+          render();
+        } catch (err) {
+          console.error(err); b.disabled = false; b.textContent = "Log as submitted";
+          toast(`Couldn’t save to the layer: ${err.message || err}`);
+        }
+      };
+    };
+    draw();
+    dlg.showModal();
+    kit.start(dlg);
+  }
+
+  loadIssues();
+});
+</script>
+</body>
+</html>
